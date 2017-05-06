@@ -1,3 +1,4 @@
+setup.cfg
 setup.py
 probo/__init__.py
 probo/engine.py

@@ -6,7 +6,7 @@ from scipy.stats import norm
 
 
 class PricingEngine(object, metaclass=abc.ABCMeta):
-    
+
     @abc.abstractmethod
     def calculate(self):
         """A method to implement a pricing model.
@@ -16,7 +16,7 @@ class PricingEngine(object, metaclass=abc.ABCMeta):
            or a Monte Carlo pricing algorithm.
         """
         pass
-        
+
 class BinomialPricingEngine(PricingEngine):
     def __init__(self, steps, pricer):
         self.__steps = steps
@@ -29,32 +29,33 @@ class BinomialPricingEngine(PricingEngine):
     @steps.setter
     def steps(self, new_steps):
         self.__steps = new_steps
-    
+
     def calculate(self, option, data):
         return self.__pricer(self, option, data)
 
-    
+
 def EuropeanBinomialPricer(pricing_engine, option, data):
     expiry = option.expiry
     strike = option.strike
     (spot, rate, volatility, dividend) = data.get_data()
     steps = pricing_engine.steps
     nodes = steps + 1
-    dt = expiry / steps 
-    u = np.exp((rate * dt) + volatility * np.sqrt(dt)) 
-    d = np.exp((rate * dt) - volatility * np.sqrt(dt))
-    pu = (np.exp(rate * dt) - d) / (u - d)
+    dt = expiry / steps
+    u = np.exp(((rate - dividend) * dt) + volatility * np.sqrt(dt))
+    d = np.exp(((rate - dividend) * dt) - volatility * np.sqrt(dt))
+    pu = (np.exp((rate - dividend) * dt) - d) / (u - d)
     pd = 1 - pu
     disc = np.exp(-rate * expiry)
     spotT = 0.0
     payoffT = 0.0
-    
+
     for i in range(nodes):
         spotT = spot * (u ** (steps - i)) * (d ** (i))
-        payoffT += option.payoff(spotT)  * binom.pmf(steps - i, steps, pu)  
-    price = disc * payoffT 
-     
-    return price 
+        payoffT += option.payoff(spotT)  * binom.pmf(steps - i, steps, pu)
+    price = disc * payoffT
+    stdError= payoffT.std() / np.sqrt(replications)
+
+    return (prc, stdError)
 
 
 def AmericanBinomialPricer(pricingengine, option, data):
@@ -63,10 +64,10 @@ def AmericanBinomialPricer(pricingengine, option, data):
     (spot, rate, volatility, dividend) = data.get_data()
     steps = pricingengine.steps
     nodes = steps + 1
-    dt = expiry / steps 
-    u = np.exp((rate * dt) + volatility * np.sqrt(dt)) 
-    d = np.exp((rate * dt) - volatility * np.sqrt(dt))
-    pu = (np.exp(rate * dt) - d) / (u - d)
+    dt = expiry / steps
+    u = np.exp(((rate - dividend) * dt) + volatility * np.sqrt(dt))
+    d = np.exp(((rate - dividend) * dt) - volatility * np.sqrt(dt))
+    pu = (np.exp((rate - dividend) * dt) - d) / (u - d)
     pd = 1 - pu
     disc = np.exp(-rate * dt)
     dpu = disc * pu
@@ -109,7 +110,7 @@ class MonteCarloEngine(PricingEngine):
     @time_steps.setter
     def time_steps(self, new_time_steps):
         self.__time_steps = new_time_steps
-    
+
     def calculate(self, option, data):
         return self.__pricer(self, option, data)
 
@@ -117,7 +118,7 @@ class MonteCarloEngine(PricingEngine):
 def BlackScholesDelta(spot, t, strike, expiry, volatility, rate, dividend):
     tau = expiry - t
     d1 = (np.log(spot/strike) + (rate - dividend + 0.5 * volatility * volatility) * tau) / (volatility * np.sqrt(tau))
-    delta = np.exp(-dividend * tau) * norm.cdf(d1) 
+    delta = np.exp(-dividend * tau) * norm.cdf(d1)
     return delta
 
 def NaiveMonteCarloPricer(engine, option, data):
@@ -127,14 +128,15 @@ def NaiveMonteCarloPricer(engine, option, data):
     replications = engine.replications
     dt = expiry / engine.time_steps
     disc = np.exp(-rate * dt)
-    
+
     z = np.random.normal(size = replications)
     spotT = spot * np.exp((rate - div - 0.5 * vol * vol) * dt + vol * np.sqrt(dt) * z)
     payoffT = option.payoff(spotT)
 
     prc = payoffT.mean() * disc
+    stdError= payoffT.std() / np.sqrt(replications)
 
-    return prc
+    return (prc, stdError)
 
 def AntitheticMonteCarloPricer(engine, option, data):
     expiry = option.expiry
@@ -143,7 +145,7 @@ def AntitheticMonteCarloPricer(engine, option, data):
     replications = engine.replications
     dt = expiry / engine.time_steps
     disc = np.exp(-(rate - div) * dt)
-    
+
     z1 = np.random.normal(size = replications)
     z2 = -z1
     z = np.concatenate((z1,z2))
@@ -151,10 +153,34 @@ def AntitheticMonteCarloPricer(engine, option, data):
     payoffT = option.payoff(spotT)
 
     prc = payoffT.mean() * disc
+    stdError = payoffT.std() / np.sqrt(replications)
 
-    return prc
+    return (prc, stdError)
 
-    
+def StratifiedMonteCarloPricer(engine, option, data):
+    expiry = option.expiry
+    strike = option.strike
+    (spot, rate, volatility, dividend) = data.get_data()
+    replications = engine.replications
+    dt = expiry / engine.time_steps
+    disc = np.exp(-rate * dt)
+
+    u = np.random.uniform(size = replications)
+    y = np.zeros((replications,))
+    i = np.arange(replications)
+    y = (u + i) / replications
+    e = norm.ppf(y)
+
+    spotT = spot * np.exp((rate - dividend - 0.5 * volatility * volatility) * dt + volatility * np.sqrt(dt) * e)
+    payoffT = option.payoff(spotT)
+
+    prc = payoffT.mean() * disc
+
+    payoffT_std = np.std(payoffT, ddof = 1)
+    payoffT_stdError = payoffT_std / np.sqrt(replications)
+
+    return (prc, payoffT_stdError)
+
 def ControlVariatePricer(engine, option, data):
     expiry = option.expiry
     strike = option.strike
@@ -162,7 +188,7 @@ def ControlVariatePricer(engine, option, data):
     dt = expiry / engine.time_steps
     nudt = (rate - dividend - 0.5 * volatility * volatility) * dt
     sigsdt = volatility * np.sqrt(dt)
-    erddt = np.exp((rate - dividend) * dt)    
+    erddt = np.exp((rate - dividend) * dt)
     beta = -1.0
     cash_flow_t = np.zeros((engine.replications, ))
     price = 0.0
@@ -182,8 +208,8 @@ def ControlVariatePricer(engine, option, data):
         cash_flow_t[j] = option.payoff(spot_t) + beta * convar
 
     price = np.exp(-rate * expiry) * cash_flow_t.mean()
-    #stderr = cash_flow_t.std() / np.sqrt(engine.replications)
-    return price
+    stdError = cash_flow_t.std() / np.sqrt(engine.replications)
+    return (price, stdError)
 
 #class BlackScholesPayoffType(enum.Enum):
 #    call = 1
@@ -206,10 +232,10 @@ def BlackScholesPricer(pricing_engine, option, data):
     expiry = option.expiry
     (spot, rate, volatility, dividend) = data.get_data()
     d1 = (np.log(spot/strike) + (rate - dividend + 0.5 * volatility * volatility) * expiry) / (volatility * np.sqrt(expiry))
-    d2 = d1 - volatility * np.sqrt(expiry) 
+    d2 = d1 - volatility * np.sqrt(expiry)
 
     if pricing_engine.payoff_type == "call":
-        price = (spot * np.exp(-dividend * expiry) * norm.cdf(d1)) - (strike * np.exp(-rate * expiry) * norm.cdf(d2)) 
+        price = (spot * np.exp(-dividend * expiry) * norm.cdf(d1)) - (strike * np.exp(-rate * expiry) * norm.cdf(d2))
     elif pricing_engine.payoff_type == "put":
         price = (strike * np.exp(-rate * expiry) * norm.cdf(-d2)) - (spot * np.exp(-dividend * expiry) * norm.cdf(-d1))
     else:
@@ -225,4 +251,4 @@ def BlackScholesPricer(pricing_engine, option, data):
     #except ValueError:
     #    print("You must supply either a call or a put option to the BlackScholes pricing engine!")
 
-    return price 
+    return price
